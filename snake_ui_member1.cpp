@@ -1,4 +1,4 @@
-// Snake: Overdrive — первая часть интерфейса: окно и главное меню.
+// Snake: Overdrive — интерфейс: меню, игровые показатели и пауза.
 #include <SFML/Graphics.hpp>
 #include <functional>
 #include <iostream>
@@ -8,9 +8,11 @@
 
 constexpr unsigned int SCREEN_WIDTH = 900;
 constexpr unsigned int SCREEN_HEIGHT = 650;
+constexpr float HUD_HEIGHT = 70.0f;
 
 namespace Palette {
     const sf::Color Bg(18, 22, 31);
+    const sf::Color HudBg(26, 32, 44);
     const sf::Color Panel(35, 43, 59);
     const sf::Color Text(240, 244, 248);
     const sf::Color TextMuted(148, 163, 184);
@@ -86,14 +88,59 @@ public:
     }
 };
 
-enum class UIState { MainMenu, Controls, About };
+enum class UIState { MainMenu, Controls, About, Playing, Pause };
+
+// Данные для подключения логики игрока и игрового мира.
+struct GameStats {
+    int score = 0;
+    int length = 3;
+    int lives = 3;
+    int maxLives = 3;
+    int level = 1;
+    int foodLeft = 10;
+    int eatenTotal = 0;
+
+    void reset() { *this = GameStats{}; }
+};
+
+class HUD {
+public:
+    void draw(sf::RenderWindow& window, const sf::Font& font, const GameStats& stats) const {
+        sf::RectangleShape background({static_cast<float>(SCREEN_WIDTH), HUD_HEIGHT});
+        background.setFillColor(Palette::HudBg);
+        window.draw(background);
+
+        sf::Text lives(toSfString("Жизни: " + std::to_string(stats.lives) + "/" +
+                                 std::to_string(stats.maxLives) + "   |   Длина: " +
+                                 std::to_string(stats.length)), font, 20);
+        lives.setFillColor(Palette::Accent);
+        lives.setPosition(20.0f, 10.0f);
+        window.draw(lives);
+
+        sf::Text score(toSfString("Очки: " + std::to_string(stats.score)), font, 20);
+        score.setPosition(20.0f, 38.0f);
+        window.draw(score);
+
+        sf::Text level(toSfString("Уровень: " + std::to_string(stats.level) + " / 10"), font, 21);
+        centerTextX(level, 570.0f, 10.0f);
+        window.draw(level);
+
+        sf::Text food(toSfString("Осталось собрать: " + std::to_string(stats.foodLeft)), font, 16);
+        food.setFillColor(Palette::TextMuted);
+        centerTextX(food, 570.0f, 40.0f);
+        window.draw(food);
+    }
+};
 
 class UIManager {
 private:
     sf::RenderWindow& window;
     sf::Font font;
     UIState state = UIState::MainMenu;
+    GameStats stats;
+    HUD hud;
     std::vector<Button> mainMenuButtons;
+    std::vector<Button> pauseButtons;
     Button backToMenuBtn;
 
     bool loadSystemFont() {
@@ -118,6 +165,19 @@ private:
     }
 
 public:
+    GameStats& getStats() { return stats; }
+    UIState getState() const { return state; }
+
+    void startNewGame() {
+        stats.reset();
+        state = UIState::Playing;
+    }
+
+    void restartLevel() {
+        // В автономной демонстрации перезапуск сбрасывает показатели уровня.
+        startNewGame();
+    }
+
     explicit UIManager(sf::RenderWindow& win)
         : window(win),
           backToMenuBtn(310.0f, 520.0f, 280.0f, 50.0f, "Вернуться в меню",
@@ -126,6 +186,8 @@ public:
             throw std::runtime_error("Font not found. Place font.ttf beside the executable or in the working directory.");
         }
         mainMenuButtons = {
+            Button(310.0f, 185.0f, 280.0f, 50.0f, "Новая игра",
+                   [this]() { startNewGame(); }, Palette::Accent),
             Button(310.0f, 250.0f, 280.0f, 50.0f, "Управление",
                    [this]() { state = UIState::Controls; }, Palette::Accent),
             Button(310.0f, 315.0f, 280.0f, 50.0f, "Об игре",
@@ -133,18 +195,45 @@ public:
             Button(310.0f, 380.0f, 280.0f, 50.0f, "Выход",
                    [this]() { window.close(); }, Palette::Panel, Palette::Danger)
         };
+        pauseButtons = {
+            Button(310.0f, 250.0f, 280.0f, 50.0f, "Продолжить",
+                   [this]() { state = UIState::Playing; }, Palette::Accent),
+            Button(310.0f, 315.0f, 280.0f, 50.0f, "Перезапустить уровень",
+                   [this]() { restartLevel(); }),
+            Button(310.0f, 380.0f, 280.0f, 50.0f, "Главное меню",
+                   [this]() { state = UIState::MainMenu; })
+        };
     }
 
     void handleEvent(const sf::Event& event) {
         if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::Escape) {
-            state = UIState::MainMenu;
+            if (state == UIState::Playing) state = UIState::Pause;
+            else if (state == UIState::Pause) state = UIState::Playing;
+            else state = UIState::MainMenu;
+            return;
+        }
+        if (state == UIState::Playing) {
+            // Тест панели HUD до подключения игровой логики.
+            if (event.type == sf::Event::KeyPressed &&
+                event.key.code == sf::Keyboard::Enter && stats.foodLeft > 0) {
+                stats.score += 25;
+                stats.length += 1;
+                stats.eatenTotal += 1;
+                stats.foodLeft -= 1;
+            }
+            return;
+        }
+        if (state == UIState::Pause) {
+            for (auto& button : pauseButtons) {
+                if (button.handleEvent(event, window)) break;
+            }
             return;
         }
         if (state == UIState::MainMenu) {
             for (auto& button : mainMenuButtons) {
                 if (button.handleEvent(event, window)) break;
             }
-        } else {
+        } else if (state == UIState::Controls || state == UIState::About) {
             backToMenuBtn.handleEvent(event, window);
         }
     }
@@ -162,12 +251,22 @@ public:
             drawText("Ускорение: Shift", 22, 330.0f);
             drawText("Пауза в игре: Esc", 22, 390.0f);
             backToMenuBtn.draw(window, font);
-        } else {
+        } else if (state == UIState::About) {
             drawText("ОБ ИГРЕ", 32, 90.0f, Palette::Accent);
             drawText("Snake: Overdrive", 28, 220.0f);
             drawText("Аркада на выживание и развитие змейки", 20, 285.0f);
             drawText("C++17 / SFML", 20, 345.0f, Palette::TextMuted);
             backToMenuBtn.draw(window, font);
+        } else if (state == UIState::Playing || state == UIState::Pause) {
+            hud.draw(window, font, stats);
+            if (state == UIState::Playing) {
+                drawText("Демонстрация интерфейса", 28, 200.0f, Palette::Accent);
+                drawText("Enter — проверить счётчик еды", 20, 280.0f);
+                drawText("Esc — пауза", 20, 330.0f, Palette::TextMuted);
+            } else {
+                drawText("ПАУЗА", 32, 150.0f, Palette::Accent);
+                for (auto& button : pauseButtons) button.draw(window, font);
+            }
         }
     }
 };
@@ -177,6 +276,7 @@ int main() {
         sf::RenderWindow window(sf::VideoMode(SCREEN_WIDTH, SCREEN_HEIGHT),
                                 "Snake: Overdrive", sf::Style::Titlebar | sf::Style::Close);
         window.setFramerateLimit(60);
+        window.setKeyRepeatEnabled(false);
         UIManager ui(window);
         while (window.isOpen()) {
             sf::Event event;
